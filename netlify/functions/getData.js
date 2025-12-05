@@ -1,134 +1,219 @@
-exports.handler = async function(event, context) {
-  // 1. 從 Netlify 保險箱取出我們要用的所有鑰匙
-  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const scriptUrl = process.env.GOOGLE_SHEET_URL; // 這是 GAS 網址
-  const scriptSecret = process.env.GOOGLE_SHEET_SECRET; // 這是密碼
+import React, { useState, useEffect } from 'react';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { 
+  LayoutDashboard, Globe, Linkedin, MessageSquare, Send, TrendingUp, Users, Eye, MousePointerClick, Sparkles, 
+  Loader2, AlertCircle, ArrowUpRight, ArrowDownRight, Activity, FileText, Calendar
+} from 'lucide-react';
 
-  // 準備回傳的資料結構
-  let dashboardData = {
-    overview: {
-      daily: [],
-      metrics: {
-        totalViews: { value: '-', change: '0', trend: 'flat' },
-        totalEngagement: { value: '-', change: '0', trend: 'flat' },
-        conversionRate: { value: '-', change: '0%', trend: 'flat' },
-        aiScore: { value: '85', change: '+2', trend: 'up' },
-      },
-      aiInsights: []
-    },
-    // 這裡準備放 Email 名單和按鈕統計
-    telegram: { daily: [], metrics: {}, aiInsights: [], emailList: [], buttonStats: [] }
-  };
-
-  try {
-    if (!tgToken) throw new Error("未設定 TELEGRAM_BOT_TOKEN");
-
-    // 2. 組合 Google Sheet 的請求網址 (把密碼帶在後面)
-    // 網址會長得像: https://script.google.com/.../exec?secret=MY_DASHBOARD_SECRET_123
-    const sheetFetchUrl = scriptUrl ? `${scriptUrl}?secret=${scriptSecret}` : null;
-
-    // 3. 同步抓取：Telegram + Google Apps Script (平行處理速度快)
-    const [meRes, updatesRes, sheetRes] = await Promise.all([
-      fetch(`https://api.telegram.org/bot${tgToken}/getMe`),
-      fetch(`https://api.telegram.org/bot${tgToken}/getUpdates?limit=100`),
-      sheetFetchUrl ? fetch(sheetFetchUrl) : Promise.resolve(null)
-    ]);
-
-    const meData = await meRes.json();
-    const updatesData = await updatesRes.json();
-    
-    // --- 處理 Google Sheet 回傳的資料 ---
-    let emailCount = 0;
-    let recentEmails = [];
-    
-    // 如果 Google Sheet 有回應成功
-    if (sheetRes && sheetRes.ok) {
-      const sheetData = await sheetRes.json(); // 因為 GAS 現在回傳的是 JSON，不是 CSV 了
-      if (sheetData.totalCount !== undefined) {
-        emailCount = sheetData.totalCount; // 總人數
-        recentEmails = sheetData.recentList || []; // 最近 5 筆隱碼後的 Email
-      }
-    }
-
-    // --- 處理 Telegram 數據 ---
-    const rawUpdates = updatesData.result || [];
-    let messageCount = 0;
-    let buttonClicks = 0;
-    let buttonMap = {};
-
-    rawUpdates.forEach(update => {
-      if (update.message) {
-        messageCount++;
-      } else if (update.callback_query) {
-        buttonClicks++;
-        const btnId = update.callback_query.data || "unknown";
-        buttonMap[btnId] = (buttonMap[btnId] || 0) + 1;
-      }
-    });
-
-    // 統計按鈕排名
-    const topButtons = Object.entries(buttonMap)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-
-    // --- AI 分析 ---
-    let aiAnalysisText = [`📊 機器人監測中`, `名單收集: ${emailCount} 筆`];
-    
-    if (geminiKey) {
-      try {
-        const prompt = `分析數據：Telegram 收到 ${messageCount} 訊息，${buttonClicks} 次按鈕點擊。Google Sheet 累積 ${emailCount} 筆名單。給 2 點簡短繁體中文建議。`;
-        
-        // 簡單的 fetch (不使用 AbortController 避免報錯)
-        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        });
-        const gData = await geminiRes.json();
-        if (gData.candidates) {
-          aiAnalysisText = gData.candidates[0].content.parts[0].text.split('\n').filter(l => l.trim()).slice(0, 2);
-        }
-      } catch (e) { aiAnalysisText.push("AI 分析中..."); }
-    }
-
-    // --- 4. 組合最終資料 ---
-    dashboardData.overview.aiInsights = [`🤖 AI 狀態: 良好`, ...aiAnalysisText];
-    dashboardData.overview.metrics = {
-      totalViews: { value: (messageCount + buttonClicks).toString(), change: 'Live', trend: 'up' },
-      totalEngagement: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' },
-      conversionRate: { value: `${emailCount}`, change: 'Leads', trend: 'up' },
-      aiScore: { value: '92', change: '+5', trend: 'up' },
-    };
-
-    // 建立 Telegram 圖表 (包含真實數據)
-    const telegramChartData = [
-      { name: 'Mon', msgSent: 2 }, { name: 'Tue', msgSent: 5 }, { name: 'Wed', msgSent: Math.floor(messageCount * 0.3) },
-      { name: 'Thu', msgSent: 1 }, { name: 'Fri', msgSent: messageCount + buttonClicks }, { name: 'Sat', msgSent: 0 }, { name: 'Sun', msgSent: 0 },
-    ];
-
-    dashboardData.telegram = {
-      daily: telegramChartData,
-      metrics: {
-        botInteractions: { value: (messageCount + buttonClicks).toString(), change: 'Total', trend: 'up' },
-        subscribers: { value: emailCount.toString(), change: 'Leads', trend: 'up' },
-        broadcastOpenRate: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' },
-        activeRate: { value: 'High', change: '', trend: 'flat' }
-      },
-      aiInsights: aiAnalysisText,
-      emailList: recentEmails, // 這裡把 Email 名單傳給前端
-      buttonStats: topButtons  // 這裡把按鈕數據傳給前端
-    };
-
-  } catch (error) {
-    console.error(error);
-    dashboardData.overview.aiInsights = ["⚠️ 錯誤", error.message];
-  }
-
-  return {
-    statusCode: 200,
-    headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-    body: JSON.stringify(dashboardData)
-  };
+// 靜態資料結構也要配合更新
+const STATIC_TRENDS = {
+  daily: [{name:'Mon', value:10}, {name:'Tue', value:15}, {name:'Wed', value:8}, {name:'Thu', value:12}, {name:'Fri', value:20}, {name:'Sat', value:14}, {name:'Sun', value:18}],
+  weekly: [{name:'Week 1', value:80}, {name:'Week 2', value:120}, {name:'Week 3', value:95}, {name:'Week 4', value:150}],
+  monthly: [{name:'Jan', value:400}, {name:'Feb', value:380}, {name:'Mar', value:520}, {name:'Apr', value:480}]
 };
+
+const STATIC_DATA = { 
+  overview: { trends: STATIC_TRENDS, metrics: {}, aiInsights: ["Loading..."] },
+  telegram: { trends: STATIC_TRENDS, metrics: {}, aiInsights: [], emailList: [], buttonStats: [] }
+};
+
+const MetricCard = ({ title, value, change, trend, icon: Icon, color }) => (
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
+    <div className="flex justify-between items-start mb-4">
+      <div className={`p-2 rounded-lg ${color}`}>
+        {Icon ? <Icon size={20} className="text-white" /> : <div className="w-5 h-5"/>}
+      </div>
+      <div className="text-sm font-medium text-emerald-500">{change}</div>
+    </div>
+    <h3 className="text-slate-500 text-sm font-medium mb-1">{title}</h3>
+    <p className="text-2xl font-bold text-slate-800">{value || '-'}</p>
+  </div>
+);
+
+const ButtonClickChart = ({ data }) => (
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96">
+    <h3 className="font-bold mb-6 text-slate-700 flex items-center gap-2">
+      <MousePointerClick size={18} /> 用戶熱點分析
+    </h3>
+    {data && data.length > 0 ? (
+      <ResponsiveContainer width="100%" height="85%">
+        <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#e2e8f0"/>
+          <XAxis type="number" hide />
+          <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 12}} />
+          <Tooltip cursor={{fill: '#f1f5f9'}} contentStyle={{borderRadius: '8px', border: 'none'}} />
+          <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]} barSize={20}>
+            {data.map((entry, index) => <Cell key={`cell-${index}`} fill={['#6366f1', '#8b5cf6', '#ec4899'][index % 3]} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    ) : (
+      <div className="h-full flex items-center justify-center text-slate-400">尚無按鈕點擊數據</div>
+    )}
+  </div>
+);
+
+const EmailListComponent = ({ emails }) => (
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96 overflow-y-auto">
+    <h3 className="font-bold mb-4 text-slate-700 flex items-center gap-2"><FileText size={18} /> Google Sheet 名單</h3>
+    {emails && emails.length > 0 ? (
+      <ul className="space-y-3">
+        {emails.map((email, idx) => (
+          <li key={idx} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg text-sm text-slate-700">
+            <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-600 rounded-full text-xs font-bold">{idx + 1}</span>
+            {email}
+          </li>
+        ))}
+      </ul>
+    ) : <div className="text-slate-400 text-sm text-center mt-10">尚無資料</div>}
+  </div>
+);
+
+const Dashboard = () => {
+  const [activeTab, setActiveTab] = useState('overview');
+  // 新增：時間維度狀態 (daily, weekly, monthly)
+  const [timeRange, setTimeRange] = useState('daily'); 
+  const [data, setData] = useState(STATIC_DATA);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/.netlify/functions/getData')
+      .then(res => res.json())
+      .then(result => { setData(result); setIsLoading(false); })
+      .catch(() => setIsLoading(false));
+  }, []);
+
+  const currentData = data[activeTab] || data.overview || {};
+  const metrics = currentData.metrics || {};
+  // 根據選擇的時間維度，切換顯示的圖表數據
+  const trends = currentData.trends || STATIC_TRENDS;
+  const chartData = trends[timeRange] || trends.daily || [];
+
+  const isTelegram = activeTab === 'telegram';
+  const emailList = isTelegram ? (currentData.emailList || []) : [];
+  const buttonStats = isTelegram ? (currentData.buttonStats || []) : [];
+
+  const cardsConfig = isTelegram ? [
+    { key: 'botInteractions', title: '訊息互動數', icon: MessageSquare, color: 'bg-sky-500' },
+    { key: 'subscribers', title: '名單總數', icon: Users, color: 'bg-blue-500' },
+    { key: 'broadcastOpenRate', title: '按鈕點擊數', icon: MousePointerClick, color: 'bg-pink-500' },
+    { key: 'activeRate', title: '機器人狀態', icon: Globe, color: 'bg-green-500' }
+  ] : [
+    { key: 'totalViews', title: '總流量', icon: Eye, color: 'bg-indigo-600' },
+    { key: 'totalEngagement', title: '總互動', icon: MousePointerClick, color: 'bg-pink-600' },
+    { key: 'aiScore', title: 'AI 健康分', icon: Sparkles, color: 'bg-violet-600' },
+    { key: 'conversionRate', title: '轉換數', icon: TrendingUp, color: 'bg-emerald-600' }
+  ];
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
+      <aside className="w-64 bg-white border-r border-slate-200 fixed h-full z-20 hidden md:flex flex-col">
+        <div className="p-6 border-b border-slate-100 text-indigo-600 flex items-center gap-2">
+          <LayoutDashboard size={28} /><span className="text-xl font-extrabold">OmniData</span>
+        </div>
+        <nav className="p-4 space-y-1">
+          <button onClick={() => setActiveTab('overview')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'overview' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}><LayoutDashboard size={18}/> 總覽</button>
+          <button onClick={() => setActiveTab('telegram')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'telegram' ? 'bg-sky-50 text-sky-600' : 'text-slate-600 hover:bg-slate-50'}`}><Send size={18}/> Telegram Bot</button>
+        </nav>
+      </aside>
+
+      <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto">
+        <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold capitalize">{activeTab} Dashboard</h1>
+            <div className="flex gap-2 mt-1 items-center">
+               <div className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex gap-1 items-center w-fit">
+                 {isLoading ? <Loader2 className="animate-spin" size={12}/> : <Globe size={12}/>} 
+                 {isLoading ? "更新中..." : "系統線上"}
+               </div>
+            </div>
+          </div>
+
+          {/* 時間切換按鈕區 */}
+          <div className="flex bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
+            {['daily', 'weekly', 'monthly'].map((range) => (
+              <button
+                key={range}
+                onClick={() => setTimeRange(range)}
+                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all capitalize ${
+                  timeRange === range ? 'bg-slate-100 text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {range === 'daily' ? '每日' : range === 'weekly' ? '每周' : '每月'}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        {/* AI 分析區塊 */}
+        <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-6 rounded-xl border border-indigo-100 relative mb-8">
+          <div className="flex items-center gap-2 mb-4 text-indigo-900 font-bold"><Sparkles size={20} /> AI 智能分析報告</div>
+          <div className="space-y-2">
+            {(currentData.aiInsights || []).map((text, i) => (
+              <div key={i} className="bg-white/60 p-2 rounded text-indigo-800 text-sm">{text}</div>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          {cardsConfig.map(config => {
+            const m = metrics[config.key] || { value: '-', change: '' };
+            return <MetricCard key={config.key} {...config} value={m.value} change={m.change} />;
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+             {isTelegram ? (
+               <div className="space-y-6">
+                 {/* 1. 流量趨勢圖 (可切換時間) */}
+                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-80">
+                   <h3 className="font-bold mb-6 text-slate-700 flex items-center gap-2">
+                     <TrendingUp size={18} /> 流量趨勢 ({timeRange === 'daily' ? '每日' : timeRange === 'weekly' ? '每周' : '每月'})
+                   </h3>
+                   <ResponsiveContainer width="100%" height="85%">
+                     <AreaChart data={chartData}>
+                       <defs>
+                         <linearGradient id="colorMain" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#0088cc" stopOpacity={0.2}/>
+                           <stop offset="95%" stopColor="#0088cc" stopOpacity={0}/>
+                         </linearGradient>
+                       </defs>
+                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0"/>
+                       <XAxis dataKey="name" tick={{fontSize: 12}} />
+                       <YAxis tick={{fontSize: 12}} />
+                       <Tooltip />
+                       <Area type="monotone" dataKey={isTelegram ? "msgSent" : "value"} stroke="#0088cc" fillOpacity={1} fill="url(#colorMain)" />
+                     </AreaChart>
+                   </ResponsiveContainer>
+                 </div>
+                 
+                 {/* 2. 按鈕熱點圖 */}
+                 <ButtonClickChart data={buttonStats} />
+               </div>
+             ) : (
+               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96">
+                 <h3 className="font-bold mb-6 text-slate-700">流量趨勢</h3>
+                 <ResponsiveContainer width="100%" height="100%">
+                   <AreaChart data={chartData}>
+                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0"/>
+                     <XAxis dataKey="name" tick={{fontSize: 12}} />
+                     <YAxis tick={{fontSize: 12}} />
+                     <Tooltip />
+                     <Area type="monotone" dataKey="value" stroke="#6366f1" fill="#6366f1" fillOpacity={0.1} />
+                   </AreaChart>
+                 </ResponsiveContainer>
+               </div>
+             )}
+          </div>
+          
+          <div className="lg:col-span-1">
+            {isTelegram ? <EmailListComponent emails={emailList} /> : <div className="bg-white p-6 rounded-xl h-96 text-slate-400 flex items-center justify-center">更多模組開發中...</div>}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default Dashboard;
