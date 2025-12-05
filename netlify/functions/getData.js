@@ -1,124 +1,127 @@
 exports.handler = async function(event, context) {
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const sheetUrl = process.env.GOOGLE_SHEET_URL;
   const geminiKey = process.env.GEMINI_API_KEY;
 
-  // 1. 準備基礎資料 (這裡補回了 daily 數據，解決圖表消失的問題)
   let dashboardData = {
-    overview: {
-      daily: [
-        { name: 'Mon', views: 4000 },
-        { name: 'Tue', views: 3000 },
-        { name: 'Wed', views: 2000 },
-        { name: 'Thu', views: 2780 },
-        { name: 'Fri', views: 1890 },
-        { name: 'Sat', views: 2390 },
-        { name: 'Sun', views: 3490 },
-      ],
-      metrics: {
-        totalViews: { value: 'Loading...', change: '0', trend: 'flat' },
-        totalEngagement: { value: '-', change: '0', trend: 'flat' },
-        conversionRate: { value: '3.2%', change: '-0.4%', trend: 'down' },
-        aiScore: { value: '85', change: '+2', trend: 'up' },
-      },
-      aiInsights: ["正在連線 Telegram API..."]
-    },
-    telegram: { daily: [], metrics: {}, aiInsights: [] }
+    overview: { daily: [], metrics: {}, aiInsights: [] },
+    telegram: { daily: [], metrics: {}, aiInsights: [], emailList: [], buttonStats: [] } // 新增 buttonStats
   };
 
   try {
-    // --- 抓取 Telegram 數據 ---
     if (!tgToken) throw new Error("未設定 TELEGRAM_BOT_TOKEN");
 
-    // 避免 Webhook 衝突
-    await fetch(`https://api.telegram.org/bot${tgToken}/deleteWebhook?drop_pending_updates=false`);
-    
-    // 取得機器人資訊 & 訊息
-    const [meRes, updatesRes] = await Promise.all([
+    // 平行抓取資料
+    const [meRes, updatesRes, sheetRes] = await Promise.all([
       fetch(`https://api.telegram.org/bot${tgToken}/getMe`),
-      fetch(`https://api.telegram.org/bot${tgToken}/getUpdates?limit=100&offset=-10`)
+      fetch(`https://api.telegram.org/bot${tgToken}/getUpdates?limit=100`), // 抓取最近 100 筆互動
+      sheetUrl ? fetch(sheetUrl) : Promise.resolve(null)
     ]);
 
     const meData = await meRes.json();
     const updatesData = await updatesRes.json();
+    
+    // --- 1. 處理 Google Sheet (維持原樣) ---
+    let emailCount = 0;
+    let recentEmails = [];
+    if (sheetRes && sheetRes.ok) {
+      const csvText = await sheetRes.text();
+      const rows = csvText.split('\n').filter(r => r.trim() !== '');
+      emailCount = Math.max(0, rows.length - 1);
+      recentEmails = rows.slice(1).slice(-5).reverse().map(r => r.split(',')[0]);
+    }
 
-    const botName = meData.result ? meData.result.first_name : "Bot";
-    const messages = updatesData.result || [];
-    const msgCount = messages.length;
+    // --- 2. 處理 Telegram 行為數據 (關鍵升級!) ---
+    const rawUpdates = updatesData.result || [];
+    
+    let messageCount = 0;
+    let buttonClicks = 0;
+    let buttonMap = {}; // 用來統計每個按鈕按了幾次
 
-    // --- 建立 Telegram 圖表數據 (混合真實數據) ---
-    const telegramChartData = [
-      { name: 'Mon', msgSent: 2 },
-      { name: 'Tue', msgSent: 5 },
-      { name: 'Wed', msgSent: Math.floor(msgCount * 0.5) },
-      { name: 'Thu', msgSent: 1 },
-      { name: 'Fri', msgSent: msgCount }, // 把真實數據放在今天
-      { name: 'Sat', msgSent: 3 },
-      { name: 'Sun', msgSent: 8 },
-    ];
+    rawUpdates.forEach(update => {
+      // 情況 A: 用戶傳送文字訊息
+      if (update.message) {
+        messageCount++;
+      }
+      // 情況 B: 用戶點擊按鈕 (Callback Query)
+      else if (update.callback_query) {
+        buttonClicks++;
+        // 抓取按鈕的 ID (data)
+        const btnId = update.callback_query.data || "unknown_btn";
+        if (!buttonMap[btnId]) buttonMap[btnId] = 0;
+        buttonMap[btnId]++;
+      }
+    });
 
-    // --- AI 分析 (Google Gemini) ---
-    let aiAnalysisText = [`📊 機器人 (${botName}) 監測中`, `累積訊息數: ${msgCount}`];
+    // 將按鈕統計轉為陣列，並排序 (取前 5 名)
+    const topButtons = Object.entries(buttonMap)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // --- 3. 準備 AI 分析 ---
+    let aiInsights = [`📊 監測到 ${rawUpdates.length} 個互動事件`];
+    if (buttonClicks > 0) {
+      const bestBtn = topButtons.length > 0 ? topButtons[0].name : "無";
+      aiInsights.push(`🔥 最熱門按鈕: [${bestBtn}]`);
+    }
 
     if (geminiKey) {
       try {
         const prompt = `
-          你是數據分析師。分析我的 Telegram 機器人 "${botName}" 數據：
-          收到 ${msgCount} 則新訊息。最新訊息內容: "${msgCount > 0 ? messages[messages.length - 1].message.text : '無'}"。
-          請給出 2 點簡短繁體中文分析 (每點限 15 字內)。
+          我是 Telegram 機器人管理員。數據顯示：
+          1. 最近收到 ${messageCount} 則文字訊息。
+          2. 用戶點擊了 ${buttonClicks} 次按鈕。
+          3. 最常按的按鈕是：${topButtons.map(b => b.name).join(', ')}。
+          
+          請用繁體中文，針對用戶的「按鈕行為」給出 2 點優化腳本的建議。
         `;
-
-        // 設定 8 秒超時，避免分析太久導致網站轉圈圈
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-
         const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-          signal: controller.signal
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
-        clearTimeout(timeoutId);
-
-        const geminiData = await geminiRes.json();
-        if (geminiData.candidates && geminiData.candidates[0].content) {
-          const rawText = geminiData.candidates[0].content.parts[0].text;
-          const aiLines = rawText.split('\n').filter(line => line.trim() !== '').slice(0, 2);
-          if (aiLines.length > 0) aiAnalysisText.push(...aiLines);
+        const gData = await geminiRes.json();
+        if (gData.candidates) {
+          const text = gData.candidates[0].content.parts[0].text;
+          aiInsights = text.split('\n').filter(l => l.trim() !== '').slice(0, 2);
         }
-      } catch (aiError) {
-        console.warn("AI 分析超時或錯誤，略過");
-        aiAnalysisText.push("⚡ AI 分析忙線中，顯示基礎數據");
-      }
+      } catch (e) {}
     }
 
-    // --- 組合最終數據 ---
-    // 1. 更新 Overview (保留原本的 Daily 圖表)
-    dashboardData.overview.aiInsights = [`🤖 AI 狀態: 連線良好`, ...aiAnalysisText];
-    dashboardData.overview.metrics.totalViews = { value: msgCount.toString(), change: 'Live', trend: 'up' };
-    
-    // 2. 更新 Telegram 分頁
+    // --- 4. 組合回傳資料 ---
+    dashboardData.overview.aiInsights = [`🤖 Bot 行為分析中`, ...aiInsights];
+    dashboardData.overview.metrics = {
+      totalViews: { value: (messageCount + buttonClicks).toString(), change: 'Live', trend: 'up' },
+      totalEngagement: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' },
+      conversionRate: { value: `${emailCount}`, change: 'Leads', trend: 'up' },
+      aiScore: { value: '92', change: '+5', trend: 'up' },
+    };
+
     dashboardData.telegram = {
-      daily: telegramChartData,
+      daily: [
+        { name: 'Mon', msgSent: 2 }, { name: 'Tue', msgSent: 5 }, { name: 'Wed', msgSent: 3 },
+        { name: 'Thu', msgSent: 1 }, { name: 'Fri', msgSent: messageCount + buttonClicks }, { name: 'Sat', msgSent: 0 }, { name: 'Sun', msgSent: 0 }
+      ],
       metrics: {
-        subscribers: { value: '1', change: 'Online', trend: 'flat' },
-        botInteractions: { value: msgCount.toString(), change: '+New', trend: 'up' },
-        broadcastOpenRate: { value: '98%', change: 'Stable', trend: 'flat' },
+        botInteractions: { value: (messageCount + buttonClicks).toString(), change: 'Total', trend: 'up' },
+        subscribers: { value: emailCount.toString(), change: 'Leads', trend: 'up' },
+        broadcastOpenRate: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' }, // 借用欄位顯示點擊數
         activeRate: { value: 'High', change: '', trend: 'flat' }
       },
-      aiInsights: aiAnalysisText
+      aiInsights: aiInsights,
+      emailList: recentEmails,
+      buttonStats: topButtons // 傳送按鈕統計給前端
     };
 
   } catch (error) {
     console.error(error);
-    dashboardData.overview.aiInsights = ["⚠️ 系統錯誤", error.message];
+    dashboardData.overview.aiInsights = ["⚠️ 錯誤", error.message];
   }
 
   return {
     statusCode: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Content-Type": "application/json"
-    },
+    headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
     body: JSON.stringify(dashboardData)
   };
 };
