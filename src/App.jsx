@@ -5,20 +5,15 @@ import {
 import { 
   LayoutDashboard, Globe, Linkedin, MessageSquare, Send, 
   TrendingUp, Users, Eye, MousePointerClick, Sparkles, 
-  Loader2, AlertCircle, ArrowUpRight, ArrowDownRight
+  Loader2, AlertCircle, ArrowUpRight, ArrowDownRight, Activity
 } from 'lucide-react';
 
-// --- 靜態備用資料 (Fallback) ---
+// --- 靜態備用資料 ---
 const STATIC_DATA = {
   overview: {
     daily: [
-      { name: 'Mon', views: 4000, engagement: 2400 },
-      { name: 'Tue', views: 3000, engagement: 1398 },
-      { name: 'Wed', views: 2000, engagement: 9800 },
-      { name: 'Thu', views: 2780, engagement: 3908 },
-      { name: 'Fri', views: 1890, engagement: 4800 },
-      { name: 'Sat', views: 2390, engagement: 3800 },
-      { name: 'Sun', views: 3490, engagement: 4300 },
+      { name: 'Mon', views: 4000 }, { name: 'Tue', views: 3000 }, { name: 'Wed', views: 2000 },
+      { name: 'Thu', views: 2780 }, { name: 'Fri', views: 1890 }, { name: 'Sat', views: 2390 }, { name: 'Sun', views: 3490 },
     ],
     metrics: {
       totalViews: { value: '128.5K', change: '+12%', trend: 'up' },
@@ -26,12 +21,22 @@ const STATIC_DATA = {
       conversionRate: { value: '3.2%', change: '-0.4%', trend: 'down' },
       aiScore: { value: '85/100', change: '+2', trend: 'up' },
     },
-    aiInsights: ["✅ 這是靜態備用資料。若 API 連線成功，這裡會顯示來自後端的訊息。"]
+    aiInsights: ["✅ 這是靜態備用資料 (後端尚未回應)"]
   },
-  website: { daily: [], metrics: {}, aiInsights: ["網站數據載入中..."] },
-  linkedin: { daily: [], metrics: {}, aiInsights: ["LinkedIn 數據載入中..."] },
-  forum: { daily: [], metrics: {}, aiInsights: ["論壇數據載入中..."] },
-  telegram: { daily: [], metrics: {}, aiInsights: ["Telegram 數據載入中..."] }
+  telegram: {
+    // 這裡加上 Telegram 的靜態測試資料
+    daily: [
+      { name: 'Mon', msgSent: 12 }, { name: 'Tue', msgSent: 19 }, { name: 'Wed', msgSent: 3 },
+      { name: 'Thu', msgSent: 5 }, { name: 'Fri', msgSent: 2 }, { name: 'Sat', msgSent: 3 }, { name: 'Sun', msgSent: 10 },
+    ],
+    metrics: {
+      botInteractions: { value: '3', change: '+New', trend: 'up' },
+      subscribers: { value: '105', change: '+5', trend: 'up' },
+      broadcastOpenRate: { value: '98%', change: '0%', trend: 'flat' },
+      activeRate: { value: 'High', change: '', trend: 'flat' }
+    },
+    aiInsights: ["Telegram 測試資料"]
+  }
 };
 
 // --- 元件 ---
@@ -42,7 +47,7 @@ const MetricCard = ({ title, value, change, trend, icon: Icon, color }) => (
         {Icon ? <Icon size={20} className="text-white" /> : <div className="w-5 h-5"/>}
       </div>
       {trend && (
-        <div className={`flex items-center text-sm font-medium ${trend === 'up' ? 'text-emerald-500' : 'text-rose-500'}`}>
+        <div className={`flex items-center text-sm font-medium ${trend === 'up' ? 'text-emerald-500' : 'text-slate-500'}`}>
           {trend === 'up' ? <ArrowUpRight size={16}/> : <ArrowDownRight size={16}/>}
           {change}
         </div>
@@ -75,20 +80,18 @@ const Dashboard = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [useFallback, setUseFallback] = useState(false);
 
-  // 1. 抓取 API 資料
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // 連線到 Netlify Function
         const res = await fetch('/.netlify/functions/getData');
         if (!res.ok) throw new Error('API 連線失敗');
         const result = await res.json();
         
-        setData(result); // 使用 API 資料
+        setData(result);
         setUseFallback(false);
       } catch (err) {
-        console.warn("API 連線失敗，使用靜態資料:", err);
-        setData(STATIC_DATA); // 使用備用資料
+        console.warn("使用靜態資料:", err);
+        setData(STATIC_DATA);
         setUseFallback(true);
       } finally {
         setIsLoading(false);
@@ -97,34 +100,51 @@ const Dashboard = () => {
     fetchData();
   }, []);
 
-  // 2. 根據目前 Tab 篩選資料
-  // 安全檢查：如果 API 回傳的資料缺少某個 Tab，就用靜態資料補位
+  // 取得目前分頁的資料
   const currentData = data[activeTab] || STATIC_DATA[activeTab] || STATIC_DATA.overview;
-  
-  // 處理 Metrics 的顯示邏輯 (防止 undefined 報錯)
   const metrics = currentData.metrics || {};
-  const safeMetric = (key) => {
-    const item = metrics[key];
-    // 如果是物件就取 .value，如果是字串直接回傳，如果沒有就回傳 '-'
-    if (item && typeof item === 'object') return { ...item, value: item.value || '-' };
-    return { value: '-', change: '0%', trend: 'flat' };
+  const aiInsights = currentData.aiInsights || [];
+
+  // 這是修正的關鍵：定義每個分頁要顯示什麼卡片 (Config)
+  const getCardsConfig = () => {
+    if (activeTab === 'telegram') {
+      return [
+        // 這裡對應後端回傳的 botInteractions, subscribers 等
+        { key: 'botInteractions', title: '訊息互動數', icon: MessageSquare, color: 'bg-sky-500' },
+        { key: 'subscribers', title: '訂閱人數', icon: Users, color: 'bg-blue-500' },
+        { key: 'broadcastOpenRate', title: '推播開啟率', icon: Eye, color: 'bg-teal-500' },
+        { key: 'activeRate', title: '活躍狀態', icon: Activity, color: 'bg-green-500', defaultValue: 'Online' }
+      ];
+    }
+    // 預設 (Overview)
+    return [
+      { key: 'totalViews', title: '總瀏覽量', icon: Eye, color: 'bg-indigo-600' },
+      { key: 'totalEngagement', title: '總互動數', icon: MousePointerClick, color: 'bg-pink-600' },
+      { key: 'aiScore', title: 'AI 健康分', icon: Sparkles, color: 'bg-violet-600' },
+      { key: 'conversionRate', title: '轉換率', icon: TrendingUp, color: 'bg-emerald-600' }
+    ];
   };
 
-  const metricTotalViews = safeMetric('totalViews');
-  const metricEngagement = safeMetric('totalEngagement');
-  const metricAiScore = safeMetric('aiScore');
-  const metricConversion = safeMetric('conversionRate');
+  const cardsConfig = getCardsConfig();
 
-  // 圖表顏色與數據 Key 設定
+  // 圖表設定
   let chartColor = "#6366f1";
-  let dataKey = "views";
-  if (activeTab === 'linkedin') { chartColor = "#0a66c2"; dataKey = "impressions"; }
-  else if (activeTab === 'telegram') { chartColor = "#0088cc"; dataKey = "msgSent"; }
+  let dataKey = "views"; // 預設讀取 views 欄位
   
+  if (activeTab === 'telegram') { 
+    chartColor = "#0088cc"; 
+    dataKey = "msgSent"; // Telegram 圖表改讀 msgSent 欄位
+  } else if (activeTab === 'linkedin') {
+    chartColor = "#0a66c2";
+  }
+
+  // 處理圖表資料 (若無資料顯示空陣列)
+  const chartData = currentData.daily || [];
+
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
       
-      {/* 側邊欄 (Sidebar) */}
+      {/* 側邊欄 */}
       <aside className="w-64 bg-white border-r border-slate-200 fixed h-full z-20 hidden md:flex flex-col">
         <div className="p-6 border-b border-slate-100">
           <div className="flex items-center gap-2 text-indigo-600">
@@ -137,59 +157,66 @@ const Dashboard = () => {
           <button onClick={() => setActiveTab('overview')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'overview' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}><LayoutDashboard size={18} /> 總覽 (Overview)</button>
           <button onClick={() => setActiveTab('website')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'website' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-600 hover:bg-slate-50'}`}><Globe size={18} /> 官方網站</button>
           <button onClick={() => setActiveTab('linkedin')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'linkedin' ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}><Linkedin size={18} /> LinkedIn</button>
-          <button onClick={() => setActiveTab('forum')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'forum' ? 'bg-violet-50 text-violet-600' : 'text-slate-600 hover:bg-slate-50'}`}><MessageSquare size={18} /> 論壇</button>
-          <button onClick={() => setActiveTab('telegram')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'telegram' ? 'bg-sky-50 text-sky-600' : 'text-slate-600 hover:bg-slate-50'}`}><Send size={18} /> Telegram</button>
+          <button onClick={() => setActiveTab('telegram')} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'telegram' ? 'bg-sky-50 text-sky-600' : 'text-slate-600 hover:bg-slate-50'}`}><Send size={18} /> Telegram Bot</button>
         </nav>
       </aside>
 
-      {/* 主內容區 */}
+      {/* 主內容 */}
       <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 capitalize">{activeTab} Dashboard</h1>
             <p className="text-slate-500 text-sm mt-1">即時數據監控中心</p>
           </div>
-          
           <div className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2 ${useFallback ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700'}`}>
-            {isLoading ? (
-              <><Loader2 size={14} className="animate-spin"/> 連線中...</>
-            ) : useFallback ? (
-              <><AlertCircle size={14}/> 離線模式 (Mock Data)</>
-            ) : (
-              <><Globe size={14}/> 雲端連線成功 (Live API)</>
-            )}
+            {isLoading ? <><Loader2 size={14} className="animate-spin"/> 讀取中...</> : 
+             useFallback ? <><AlertCircle size={14}/> 離線模式</> : <><Globe size={14}/> 雲端連線成功</>}
           </div>
         </header>
 
-        {/* AI 分析卡片 */}
-        <AIInsightCard insights={currentData.aiInsights} />
+        {/* AI 分析 */}
+        <AIInsightCard insights={aiInsights} />
 
-        {/* 數據 Metrics */}
+        {/* 動態渲染數據卡片 */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <MetricCard title="Total Views" value={metricTotalViews.value} change={metricTotalViews.change} trend={metricTotalViews.trend} icon={Eye} color="bg-indigo-600" />
-          <MetricCard title="Engagement" value={metricEngagement.value} change={metricEngagement.change} trend={metricEngagement.trend} icon={MousePointerClick} color="bg-pink-600" />
-          <MetricCard title="AI Score" value={metricAiScore.value} change={metricAiScore.change} trend={metricAiScore.trend} icon={Sparkles} color="bg-violet-600" />
-          <MetricCard title="Conversion" value={metricConversion.value} change={metricConversion.change} trend={metricConversion.trend} icon={TrendingUp} color="bg-emerald-600" />
+          {cardsConfig.map((config) => {
+            const metricData = metrics[config.key] || { value: config.defaultValue || '-', change: '0%', trend: 'flat' };
+            return (
+              <MetricCard 
+                key={config.key}
+                title={config.title} 
+                value={metricData.value} 
+                change={metricData.change} 
+                trend={metricData.trend} 
+                icon={config.icon} 
+                color={config.color} 
+              />
+            );
+          })}
         </div>
 
         {/* 圖表 */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96">
           <h3 className="font-bold mb-6 text-slate-700">趨勢圖表 ({activeTab})</h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={currentData.daily || []}>
-              <defs>
-                <linearGradient id="colorMain" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={chartColor} stopOpacity={0.2}/>
-                  <stop offset="95%" stopColor={chartColor} stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0"/>
-              <XAxis dataKey="name" tick={{fontSize: 12}} />
-              <YAxis tick={{fontSize: 12}} />
-              <Tooltip />
-              <Area type="monotone" dataKey={dataKey === 'views' ? 'views' : dataKey} stroke={chartColor} fillOpacity={1} fill="url(#colorMain)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          {chartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="colorMain" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={chartColor} stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor={chartColor} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0"/>
+                <XAxis dataKey="name" tick={{fontSize: 12}} />
+                <YAxis tick={{fontSize: 12}} />
+                <Tooltip />
+                <Area type="monotone" dataKey={dataKey === 'views' ? 'views' : dataKey} stroke={chartColor} fillOpacity={1} fill="url(#colorMain)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex items-center justify-center text-slate-400">目前尚無圖表數據</div>
+          )}
         </div>
       </main>
     </div>
