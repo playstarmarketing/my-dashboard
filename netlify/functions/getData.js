@@ -1,6 +1,6 @@
 exports.handler = async function(event, context) {
-  // 這裡以後會換成去抓 LinkedIn/Telegram 的真實程式碼
-  // 現在我們先把假資料放在後端，模擬 API 的運作
+  // 這是後端程式，以後我們會在這裡寫程式去連 Telegram/LinkedIn
+  // 現在我們先回傳「假資料」來測試串接有沒有成功
   
   const mockData = {
     overview: {
@@ -13,12 +13,6 @@ exports.handler = async function(event, context) {
         { name: 'Sat', views: 2390, engagement: 3800 },
         { name: 'Sun', views: 3490, engagement: 4300 },
       ],
-      weekly: [
-        { name: 'Week 1', views: 24000, engagement: 12400 },
-        { name: 'Week 2', views: 33000, engagement: 15398 },
-        { name: 'Week 3', views: 22000, engagement: 9800 },
-        { name: 'Week 4', views: 42780, engagement: 23908 },
-      ],
       metrics: {
         totalViews: { value: '128.5K', change: '+12%', trend: 'up' },
         totalEngagement: { value: '42.3K', change: '+5%', trend: 'up' },
@@ -26,18 +20,22 @@ exports.handler = async function(event, context) {
         aiScore: { value: '85/100', change: '+2', trend: 'up' },
       },
       aiInsights: [
-        "（來自後端 API）總體流量在本周三達到高峰。",
-        "（來自後端 API）Telegram 機器人的活躍度顯著提升。",
-        "這段文字是透過 Netlify Functions 傳送過來的！"
+        "✅ 成功連線！這條訊息來自您的 Netlify 後端 API。",
+        "LinkedIn 的數據目前穩定成長中。",
+        "Telegram 機器人收到大量詢問。"
       ]
     },
-    // ... 為了節省篇幅，其他平台暫時省略，前端會處理預設值
+    // 其他平台的預設空資料，避免報錯
+    website: { daily: [], metrics: {}, aiInsights: [] },
+    linkedin: { daily: [], metrics: {}, aiInsights: [] },
+    forum: { daily: [], metrics: {}, aiInsights: [] },
+    telegram: { daily: [], metrics: {}, aiInsights: [] }
   };
 
   return {
     statusCode: 200,
     headers: {
-      "Access-Control-Allow-Origin": "*", // 允許跨域存取
+      "Access-Control-Allow-Origin": "*", // 允許跨域
       "Content-Type": "application/json"
     },
     body: JSON.stringify(mockData)
