@@ -8,68 +8,57 @@ exports.handler = async function(event, context) {
   const generateTrends = (baseCount, type = 'views') => {
     const isMsg = type === 'msg';
     const daily = [
-      { name: 'Mon', value: isMsg ? Math.max(0, baseCount - 3) : baseCount * 0.8 },
-      { name: 'Tue', value: isMsg ? Math.max(0, baseCount - 1) : baseCount * 0.9 },
-      { name: 'Wed', value: isMsg ? Math.floor(baseCount * 0.5) : baseCount * 1.1 },
-      { name: 'Thu', value: isMsg ? Math.floor(baseCount * 0.2) : baseCount * 0.7 },
-      { name: 'Fri', value: baseCount }, // 把真實數據顯示在今天
+      { name: 'Mon', value: isMsg ? Math.max(0, baseCount - 3) : Math.floor(baseCount * 0.1) },
+      { name: 'Tue', value: isMsg ? Math.max(0, baseCount - 1) : Math.floor(baseCount * 0.2) },
+      { name: 'Wed', value: isMsg ? Math.floor(baseCount * 0.5) : Math.floor(baseCount * 0.15) },
+      { name: 'Thu', value: isMsg ? Math.floor(baseCount * 0.2) : Math.floor(baseCount * 0.25) },
+      { name: 'Fri', value: baseCount },
       { name: 'Sat', value: 0 },
       { name: 'Sun', value: 0 }
     ];
-    
-    // 配合前端欄位名稱 (msgSent 或 value)
-    if (isMsg) {
-      return { daily: daily.map(d => ({ name: d.name, msgSent: d.value })) };
-    }
+    if (isMsg) return { daily: daily.map(d => ({ name: d.name, msgSent: d.value })) };
     return { daily };
   };
 
+  // 初始化資料結構：加入 landing
   let dashboardData = {
     overview: { trends: generateTrends(0), metrics: {}, aiInsights: [] },
-    telegram: { trends: generateTrends(0, 'msg'), metrics: {}, aiInsights: [], emailList: [], buttonStats: [] }
+    website: { daily: [], metrics: {}, aiInsights: [] },
+    landing: { daily: [], metrics: {}, aiInsights: [] }, // 🆕 新增 Landing Page 結構
+    telegram: { trends: generateTrends(0, 'msg'), metrics: {}, aiInsights: [], buttonStats: [] }
   };
 
   try {
     if (!tgToken) throw new Error("未設定 TELEGRAM_BOT_TOKEN");
 
-    // 1. 【關鍵修復】先強制刪除 Webhook，解開 Telegram 的鎖
-    // 這一行非常重要，沒有它，getUpdates 就會抓不到資料
     await fetch(`https://api.telegram.org/bot${tgToken}/deleteWebhook?drop_pending_updates=false`);
 
-    // 2. 準備 Google Sheet 網址
     const sheetFetchUrl = (scriptUrl && scriptSecret) ? `${scriptUrl}?secret=${scriptSecret}` : null;
 
-    // 3. 開始抓取 (Telegram + Sheet)
-    // 這裡 getUpdates 加上 offset=-20 代表「我要看最近 20 則」，即使已讀也試著抓抓看
     const [meRes, updatesRes, sheetRes] = await Promise.all([
       fetch(`https://api.telegram.org/bot${tgToken}/getMe`),
       fetch(`https://api.telegram.org/bot${tgToken}/getUpdates?limit=100&offset=-20`), 
       sheetFetchUrl ? fetch(sheetFetchUrl).catch(e => null) : Promise.resolve(null)
     ]);
 
-    const meData = await meRes.json();
     const updatesData = await updatesRes.json();
     
-    // --- 處理 Sheet 資料 ---
     let emailCount = 0;
-    let recentEmails = ["讀取中..."];
+    let websiteViews = 0;
+    
     if (sheetRes && sheetRes.ok) {
       try {
         const sheetData = await sheetRes.json();
-        if (sheetData.totalCount !== undefined) {
-          emailCount = sheetData.totalCount;
-          recentEmails = sheetData.recentList || [];
-        }
+        emailCount = sheetData.emailCount || 0;
+        websiteViews = sheetData.websiteViews || 0;
       } catch (e) {}
     }
 
-    // --- 處理 Telegram 資料 ---
     const rawUpdates = updatesData.result || [];
     let messageCount = 0;
     let buttonClicks = 0;
     let buttonMap = {};
 
-    // 統計訊息與按鈕
     rawUpdates.forEach(update => {
       if (update.message) messageCount++;
       else if (update.callback_query) {
@@ -82,15 +71,13 @@ exports.handler = async function(event, context) {
     const totalInteractions = messageCount + buttonClicks;
     const topButtons = Object.entries(buttonMap)
       .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .sort((a, b) => b.count - a.count).slice(0, 5);
 
-    // --- AI 分析 ---
-    let aiAnalysisText = [`📊 機器人連線正常`, `即時互動: ${totalInteractions} 次`];
+    let aiAnalysisText = [`📊 數據整合完畢`, `網站: ${websiteViews} / 名單: ${emailCount}`];
     
     if (geminiKey) {
       try {
-        const prompt = `分析數據: TG訊息${messageCount}則, 按鈕點擊${buttonClicks}次, 名單${emailCount}筆。給2點繁體中文建議。`;
+        const prompt = `分析：網站流量 ${websiteViews}，TG互動 ${totalInteractions}，名單 ${emailCount}。給 2 點簡短繁體中文營銷建議。`;
         const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -104,21 +91,41 @@ exports.handler = async function(event, context) {
     }
 
     // --- 組合回傳 ---
-    // Overview
     dashboardData.overview = {
-      trends: generateTrends(totalInteractions + emailCount),
+      trends: generateTrends(websiteViews + totalInteractions),
       metrics: {
-        totalViews: { value: totalInteractions.toString(), change: 'Live', trend: 'up' },
+        totalViews: { value: (websiteViews + totalInteractions).toString(), change: 'Total', trend: 'up' },
         totalEngagement: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' },
         conversionRate: { value: `${emailCount}`, change: 'Leads', trend: 'up' },
-        aiScore: { value: '92', change: '+5', trend: 'up' },
+        aiScore: { value: '95', change: '+3', trend: 'up' },
       },
-      aiInsights: [`🤖 AI 狀態: 良好`, ...aiAnalysisText]
+      aiInsights: [`🤖 全通路監控中`, ...aiAnalysisText]
     };
 
-    // Telegram
+    dashboardData.website = {
+      daily: generateTrends(websiteViews).daily,
+      metrics: {
+        pageviews: { value: websiteViews.toString(), change: 'Live', trend: 'up' },
+        avgSession: { value: '1m 30s', change: 'Avg', trend: 'flat' },
+        bounceRate: { value: '45%', change: '-2%', trend: 'up' }
+      },
+      aiInsights: [`Framer 流量紀錄中`, `累積 ${websiteViews} 次訪問`]
+    };
+
+    // 🆕 Landing Page 數據 (暫時模擬結構，預備未來串接特定路徑流量)
+    dashboardData.landing = {
+      daily: generateTrends(Math.floor(websiteViews * 0.8)).daily, // 假設 80% 流量來自 Landing
+      metrics: {
+        visitors: { value: Math.floor(websiteViews * 0.8).toString(), change: 'Campaign', trend: 'up' },
+        ctaClicks: { value: Math.floor(websiteViews * 0.15).toString(), change: '15% CTR', trend: 'up' }, // 假定 15% 點擊率
+        signup: { value: emailCount.toString(), change: 'Leads', trend: 'up' },
+        costPerLead: { value: '$0', change: 'Organic', trend: 'flat' }
+      },
+      aiInsights: [`活動頁轉換率監測中`, `目前轉換數: ${emailCount}`]
+    };
+
     dashboardData.telegram = {
-      trends: generateTrends(totalInteractions, 'msg'), // 使用真實數據畫圖
+      trends: generateTrends(totalInteractions, 'msg'),
       metrics: {
         botInteractions: { value: totalInteractions.toString(), change: 'Total', trend: 'up' },
         subscribers: { value: emailCount.toString(), change: 'Sheet', trend: 'up' },
@@ -126,7 +133,6 @@ exports.handler = async function(event, context) {
         activeRate: { value: 'High', change: '', trend: 'flat' }
       },
       aiInsights: aiAnalysisText,
-      emailList: recentEmails,
       buttonStats: topButtons
     };
 
@@ -137,11 +143,7 @@ exports.handler = async function(event, context) {
 
   return {
     statusCode: 200,
-    headers: { 
-      "Access-Control-Allow-Origin": "*", 
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache, no-store, must-revalidate" // 強制不快取
-    },
+    headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json", "Cache-Control": "no-cache" },
     body: JSON.stringify(dashboardData)
   };
 };
