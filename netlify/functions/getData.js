@@ -20,11 +20,10 @@ exports.handler = async function(event, context) {
     return { daily };
   };
 
-  // 初始化資料結構：加入 landing
+  // 初始化資料結構：只保留 overview, website, telegram
   let dashboardData = {
     overview: { trends: generateTrends(0), metrics: {}, aiInsights: [] },
     website: { daily: [], metrics: {}, aiInsights: [] },
-    landing: { daily: [], metrics: {}, aiInsights: [] }, // 🆕 新增 Landing Page 結構
     telegram: { trends: generateTrends(0, 'msg'), metrics: {}, aiInsights: [], buttonStats: [] }
   };
 
@@ -73,11 +72,17 @@ exports.handler = async function(event, context) {
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count).slice(0, 5);
 
-    let aiAnalysisText = [`📊 數據整合完畢`, `網站: ${websiteViews} / 名單: ${emailCount}`];
+    // 計算轉換率 (名單 / 訪客)
+    let conversionRate = 0;
+    if (websiteViews > 0) {
+      conversionRate = ((emailCount / websiteViews) * 100).toFixed(1);
+    }
+
+    let aiAnalysisText = [`📊 數據整合完畢`, `流量: ${websiteViews} / 轉換率: ${conversionRate}%`];
     
     if (geminiKey) {
       try {
-        const prompt = `分析：網站流量 ${websiteViews}，TG互動 ${totalInteractions}，名單 ${emailCount}。給 2 點簡短繁體中文營銷建議。`;
+        const prompt = `分析 Landing Page 表現：訪客 ${websiteViews} 人，獲取名單 ${emailCount} 筆，轉換率 ${conversionRate}%。TG互動 ${totalInteractions}。請給出 2 點優化轉換率的簡短繁體中文建議。`;
         const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -96,32 +101,22 @@ exports.handler = async function(event, context) {
       metrics: {
         totalViews: { value: (websiteViews + totalInteractions).toString(), change: 'Total', trend: 'up' },
         totalEngagement: { value: buttonClicks.toString(), change: 'Clicks', trend: 'up' },
-        conversionRate: { value: `${emailCount}`, change: 'Leads', trend: 'up' },
-        aiScore: { value: '95', change: '+3', trend: 'up' },
+        leads: { value: `${emailCount}`, change: 'Signups', trend: 'up' },
+        aiScore: { value: '92', change: '+2', trend: 'up' },
       },
       aiInsights: [`🤖 全通路監控中`, ...aiAnalysisText]
     };
 
+    // 🌟 整合後的 Website (Landing Page) 數據
     dashboardData.website = {
       daily: generateTrends(websiteViews).daily,
       metrics: {
-        pageviews: { value: websiteViews.toString(), change: 'Live', trend: 'up' },
-        avgSession: { value: '1m 30s', change: 'Avg', trend: 'flat' },
-        bounceRate: { value: '45%', change: '-2%', trend: 'up' }
+        visitors: { value: websiteViews.toString(), change: 'Views', trend: 'up' }, // 流量
+        leads: { value: emailCount.toString(), change: 'Leads', trend: 'up' }, // 名單數
+        conversionRate: { value: `${conversionRate}%`, change: 'Rate', trend: conversionRate > 1 ? 'up' : 'flat' }, // 轉換率
+        avgCost: { value: '$0', change: 'Organic', trend: 'flat' } // 獲客成本(有機)
       },
-      aiInsights: [`Framer 流量紀錄中`, `累積 ${websiteViews} 次訪問`]
-    };
-
-    // 🆕 Landing Page 數據 (暫時模擬結構，預備未來串接特定路徑流量)
-    dashboardData.landing = {
-      daily: generateTrends(Math.floor(websiteViews * 0.8)).daily, // 假設 80% 流量來自 Landing
-      metrics: {
-        visitors: { value: Math.floor(websiteViews * 0.8).toString(), change: 'Campaign', trend: 'up' },
-        ctaClicks: { value: Math.floor(websiteViews * 0.15).toString(), change: '15% CTR', trend: 'up' }, // 假定 15% 點擊率
-        signup: { value: emailCount.toString(), change: 'Leads', trend: 'up' },
-        costPerLead: { value: '$0', change: 'Organic', trend: 'flat' }
-      },
-      aiInsights: [`活動頁轉換率監測中`, `目前轉換數: ${emailCount}`]
+      aiInsights: [`Landing Page 監控中`, `目前轉換率: ${conversionRate}%`]
     };
 
     dashboardData.telegram = {
